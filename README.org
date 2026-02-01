@@ -1,0 +1,1 @@
+#+title: ~org-hold~ - A super light alternative to ~org-capture~ with declarative locator and customizable feeder.
