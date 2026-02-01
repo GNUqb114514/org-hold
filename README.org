@@ -1,1 +1,185 @@
 #+title: ~org-hold~ - A super light alternative to ~org-capture~ with declarative locator and customizable feeder.
+~org-hold~ is an Emacs package for creating any kinds of org entrys (e.g., journal entries, tasks, meeting records, etc.), specifically in ~org-mode~ but not only. It can be seen as a lighter and more flexible alternative to ~org-capture~ and ~org-catch~.
+
+~org-hold~ template consists of two functions: feeder and locator. The feeder decides what to insert and the locator decides where to insert. We also provides some common locators.
+
+* Installation
+This package is not available on MELPA so you will have to install it from GitHub. Check out your package manager for more details.
+
+* How to use
+** Write a feeder
+A feeder is a function that takes no arguments and returns an org entry which will be inserted. Here is a simple one:
+#+begin_src emacs-lisp
+  (defun hello-feeder ()
+    "A simple feeder that says hello to who called it."
+    "* Greeting
+  Hello from the feeder!")
+#+end_src
+Here is a complex one:
+#+begin_src emacs-lisp
+  (defun todo-feeder ()
+    "A feeder for TODO entries"
+    (let* ((title (read-string "The title of the TODO: "))
+  	 (deadline (org-read-date nil nil nil "Deadline: " nil "+3d"))
+  	 (creation (format-time-string "[%Y-%m-%d %a %H:%M]" (org-current-time))))
+      (format "* TODO [#B] %s\n:Created: %s\nDEADLINE: <%s>\n" title creation deadline)))
+#+end_src
+And here is a more complex one:
+#+begin_src emacs-lisp
+  (defun meeting-feeder ()
+    "A feeder for GitHub issue TODO entry."
+    (let* ((title (read-string "The title of the issue, e.g. Something went wrong #42"))
+  	 (repo (read-string "The repo where the issue is at, e.g. torvalds/linux"))
+  	 (link (replace-regexp-in-string "\\(.* \\)?#\\([0-9]+\\)"
+  					 (format "[[https://github.com/%s/issues/\\2][\\&]]" repo)
+  					 title t))
+  	 (deadline (org-read-date nil nil nil "Deadline: " nil "+1m"))
+  	 (creation (format-time-string "[%Y-%m-%d %a %H:%M]" (org-current-time))))
+      (format "* TODO GitHub issue %s\n:Created: %s\nDEADLINE: <%s>\n" link creation deadline)))
+#+end_src
+Since you are writing no more than a function, you can do almost everything you want.
+
+** Write a locator
+A locator is a function that takes no arguments, goes to the correct location for the entry to be inserted in, and returns the correct level the entry should be at. Here is a simple one, which goes to the specified file:
+#+begin_src emacs-lisp
+  (defun locator-todo-file ()
+    "A locator to the TODO file."
+    (find-file-other-window "path/to/your/todos.org")
+    (org-current-level))
+#+end_src
+However, the following one is /not/ a locator since it requires an argument:
+#+begin_src emacs-lisp
+    (defun not-a-locator (file) ; Oops, we don't want an argument!
+      (find-file-other-window file)
+      (org-current-level))
+#+end_src
+And this is a function that /returns/ a locator, which is very common:
+#+begin_src emacs-lisp
+  ;; Take care of lexical bindings!
+  (defun function-returning-locator (file)
+    (lambda ()
+      (find-file-other-window file)
+      (org-current-level)))
+#+end_src
+Also, you can use the helper functions provided by this package:
+#+begin_src emacs-lisp
+  ;; We want to go to...
+  (org-hold-locator-end-of-subtree                            ; the end of the subtree of...
+   (org-hold-locator-monthly-datetree-in                      ; the position in the monthly datetree...
+    (lambda () (org-hold-decode-time-mdy (org-current-time))) ; referring to today...
+    (org-hold-locator-olp-in                                  ; in the headline...
+     '("TODOs" "GitHub issues")                               ; TODOs/GitHub issues in...
+     (org-hold-locator-file "path/to/your/todos.org"))))      ; the todo file. 
+  ;; This evaluates to a locator.
+#+end_src
+For more information, see the source code.
+Here are some tips:
+- Most of the helper functions take a locator and modify the point based on it, e.g. ~org-hold-locator-monthly-datetree-in~ goes to the datetree in the subtree /at point/. Since they require arguments, they are designed to /return/ a locator, not to /be/ one.
+- When you write your own locator, remember:
+  1. It should *not* take arguments;
+  2. It should normally *independent* of the point where it is called, unless intended.
+  3. It should *return* the correct level the entry should be in.
+     For example, if you have the following structure:
+     #+begin_src org
+       ,* Heading 1
+       ,** Heading 2
+       ,*** Heading 3
+       ,*Hello!*
+     #+end_src
+     and you want to put your entry under Heading 2, return 2.
+     
+     Normally you will want to use ~(org-current-level)~, but make sure to do some tests. When writing your own logic, don't forget to check ~org-odd-levels-only~, or just use ~(org-level-increment)~.
+
+** Putting them together
+Use ~org-hold-template~. This returns an interactive function that does the work.
+#+begin_src emacs-lisp
+  (org-hold-template #'feeder #'locator)
+#+end_src
+You can call it, map a key to it, use it as a hook, and so on.
+
+Here is an overall example.
+#+begin_src emacs-lisp
+  ;; First the feeder.
+  (defun github-issue-todo-feeder ()
+    "A feeder for GitHub issue TODO entry."
+    (let* ((title (read-string "The title of the issue, e.g. Something went wrong #42"))
+  	 (repo (read-string "The repo where the issue is at, e.g. torvalds/linux"))
+  	 (link (replace-regexp-in-string "\\(.* \\)?#\\([0-9]+\\)"
+  					 (format "[[https://github.com/%s/issues/\\2][\\&]]" repo)
+  					 title t))
+  	 (deadline (org-read-date nil nil nil "Deadline: " nil "+1m"))
+  	 (creation (format-time-string "[%Y-%m-%d %a %H:%M]" (org-current-time))))
+      (format "* TODO GitHub issue %s\n:Created: %s\nDEADLINE: <%s>\n" link creation deadline)))
+
+  ;; Then the locator.
+  (setq github-issue-todo-locator (org-hold-locator-end-of-subtree
+  				 (org-hold-locator-monthly-datetree-in
+  				  (lambda () (org-hold-decode-time-mdy (org-current-time)))
+  				  (org-hold-locator-olp-in
+  				   '("TODOs" "GitHub issues")
+  				   (org-hold-locator-file "path/to/your/todos.org")))))))
+
+  ;; Put them together. We don't need a separate paragraph for our locator.
+  (bind-key "C-c c t g" (org-hold-template #'meeting-feeder github-issue-todo-locator))
+#+end_src
+We can even mix them all in one line:
+#+begin_src emacs-lisp
+  (bind-key "C-c c t g" (org-hold-template (lambda ()
+  					   (let* ((title (read-string "The title of the issue, e.g. Something went wrong #42"))
+  						  (repo (read-string "The repo where the issue is at, e.g. torvalds/linux"))
+  						  (link (replace-regexp-in-string
+  							 "\\(.* \\)?#\\([0-9]+\\)"
+  							 (format "[[https://github.com/%s/issues/\\2][\\&]]" repo)
+  							 title t))
+  						  (deadline (org-read-date nil nil nil "Deadline: " nil "+1m"))
+  						  (creation (format-time-string "[%Y-%m-%d %a %H:%M]" (org-current-time))))
+  					     (format "* TODO GitHub issue %s\n:Created: %s\nDEADLINE: <%s>\n" link creation deadline)))
+  					 (org-hold-locator-end-of-subtree
+  					  (org-hold-locator-monthly-datetree-in ; the position in the monthly datetree...
+  					   (lambda () (org-hold-decode-time-mdy (org-current-time))) ; referring to today...
+  					   (org-hold-locator-olp-in ; in the headline...
+  					    '("TODOs" "GitHub issues") ; TODOs/GitHub issues in...
+  					    (org-hold-locator-file "path/to/your/todos.org")))))) 
+#+end_src
+
+* Comparison to similar things
+This section compares this package with ~org-capture~ and ~org-catch~.
+** With ~org-capture~
+~org-capture~ is the built-in framework for capturing things. One of its big benefits is that it don't ask you to install extra things, but its grammar is too complicated to me, not to mention the horrible string escaping.
+
+*What ~org-capture~ did better*:
+- *Built-in with Emacs.* ~org-capture~ runs on almost /everywhere/ Emacs runs on, and you don't need to install extra things.
+
+*What this package did better*:
+- *Simple grammar.* ~org-capture~ is a huge thing whose grammar string has a lot of placeholders. This package, on the other hand, ask you for a function, which is obviously more easy to understand.
+- *Flexibility and easiness.* This package allow you to pass any function and do anything you want to do, but ~org-capture~ lacks of some placeholders despite the fact that they already have a lot. If you are going to use the ~%(sexp)~ syntax, get ready to escape a lot of double-quotes and realise that you mistyped a backslash. Also, this package is intended to be usable everywhere, while ~org-capture~ forces you to specify /what you will press/ instead of /what you will insert/, which seems like a hack for me.
+  
+** With ~org-catch~
+I once considered ~org-catch~ but then realised that I can't even understand its document. Both of this package and it needs to be downloaded from GitHub, so that's a draw.
+
+*What ~org-catch~ did better*:
+- *(Maybe) less boilerplates.* ~org-catch~ requires significantly less code than this package.
+
+*What this package did better*:
+- *Documentation,* which is something ~org-catch~ seems not to have.
+- *Flexibility, again.* You seems to need to add something to a global list if you want some customization, but you don't need to do that in this package.
+  *Disclaimer*: I don't guarantee that ~org-catch~ do need you to add something to a global list, because I don't even understand what it is doing. @ me if I'm wrong.
+
+* Roadmap
+- [X] Make things at least work
+- [-] Make things better [0/3]
+  - [-] More helper locators
+  - [ ] Maybe helper feeders?
+  - [ ] Error catching
+  - [ ] Compatibility with older Emacs
+- [-] Make things work in more occations [1/6]
+  - [X] Subheaders,
+  - [ ] Paragraphs,
+  - [ ] List items,
+  - [ ] Checkboxes,
+  - [ ] Table lines(?),
+  - [ ] etc.
+
+* Fun fact
+- The core functionality of this package, specifically ~org-hold-templates~, is only 12 lines long, and 6 of them is the docstring.
+- It took only about 3 hours for me to develop the first working version of this package.
